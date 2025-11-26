@@ -1,50 +1,21 @@
-// plugins/socket.io.client.ts
-import { io, type Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
+
+let socket: any = null;
 
 export default defineNuxtPlugin(() => {
-  let socket: Socket;
-
-  const getSocketUrl = (): string => {
-    if (import.meta.client) {
-      return window.location.origin;
-    }
-    return 'http://localhost:3000';
-  };
-
-  const initSocket = (): Socket => {
-    if (!socket || socket.disconnected) {
-      const socketUrl = getSocketUrl();
-
-      socket = io(socketUrl, {
-        path: '/socket.io/',
-        // На production (Vercel) используем только WebSocket
-        transports: ['websocket'],
+  const initSocket = () => {
+    if (!socket) {
+      socket = io('http://localhost:3001', {
+        transports: ['websocket', 'polling'],
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-        reconnectionAttempts: 10,
-        autoConnect: false,
-        upgrade: false,
-        // WebSocket настройки
-        rememberUpgrade: true,
-        forceNew: false
+        reconnectionAttempts: 10
       });
 
-      socket.on('connect', () => {
-        console.log('Socket connected:', socket.id);
-      });
-
-      socket.on('disconnect', () => {
-        console.log('Socket disconnected');
-      });
-
-      socket.on('error', (error: Error) => {
-        console.error('Socket error:', error);
-      });
-
-      socket.on('connect_error', (error: Error) => {
-        console.error('Connection error:', error);
-      });
+      socket.on('connect', () => console.log('✅ Connected:', socket.id));
+      socket.on('disconnect', () => console.log('❌ Disconnected'));
+      socket.on('error', (err: any) => console.error('Error:', err));
     }
     return socket;
   };
@@ -52,13 +23,7 @@ export default defineNuxtPlugin(() => {
   return {
     provide: {
       socket: initSocket(),
-      connectSocket: (): Socket => {
-        const sock = initSocket();
-        if (sock.disconnected) {
-          sock.connect();
-        }
-        return sock;
-      }
+      connectSocket: initSocket
     }
   };
 });
