@@ -4,9 +4,10 @@ import { io, type Socket } from 'socket.io-client';
 export default defineNuxtPlugin(() => {
   let socket: Socket;
 
-  // Определяем правильный URL и протокол
   const getSocketUrl = (): string => {
-    if (process.client) {
+    if (import.meta.client) {
+      // На Vercel и production используем текущий домен
+      // Socket.IO автоматически перенаправит на правильный port
       return window.location.origin;
     }
     return 'http://localhost:3000';
