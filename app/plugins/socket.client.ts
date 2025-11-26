@@ -6,8 +6,6 @@ export default defineNuxtPlugin(() => {
 
   const getSocketUrl = (): string => {
     if (import.meta.client) {
-      // На Vercel и production используем текущий домен
-      // Socket.IO автоматически перенаправит на правильный port
       return window.location.origin;
     }
     return 'http://localhost:3000';
@@ -19,14 +17,17 @@ export default defineNuxtPlugin(() => {
 
       socket = io(socketUrl, {
         path: '/socket.io/',
-        transports: ['websocket', 'polling'],
+        // На production (Vercel) используем только WebSocket
+        transports: ['websocket'],
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-        reconnectionAttempts: 5,
+        reconnectionAttempts: 10,
         autoConnect: false,
-        secure: true,
-        rejectUnauthorized: false
+        upgrade: false,
+        // WebSocket настройки
+        rememberUpgrade: true,
+        forceNew: false
       });
 
       socket.on('connect', () => {
@@ -39,6 +40,10 @@ export default defineNuxtPlugin(() => {
 
       socket.on('error', (error: Error) => {
         console.error('Socket error:', error);
+      });
+
+      socket.on('connect_error', (error: Error) => {
+        console.error('Connection error:', error);
       });
     }
     return socket;
