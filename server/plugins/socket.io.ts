@@ -83,10 +83,7 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
     console.log('🔧 Socket.IO plugin loading...');
 
     if (!io) {
-        io = new Server(3001, {
-            cors: { origin: '*', methods: ['GET', 'POST'] },
-            transports: ['websocket', 'polling']
-        });
+        io = new Server({ cors: { origin: '*', methods: ['GET', 'POST'] } });
 
         io.on('connection', (socket) => {
             console.log('✨ Socket connected:', socket.id);
