@@ -48,8 +48,8 @@
           <!-- Шахматная доска -->
           <div class="bg-gray-700 p-4 rounded mb-4">
             <div :class="{ 'chessboard-disabled': gameStarted && playerColor !== currentTurn }">
-              <TheChessboard :board-config="boardConfig" @board-created="onBoardCreated" @move="onMove"
-                @checkmate="onCheckmate" @stalemate="onStalemate" @draw="onDraw" @check="onCheck" />
+              <TheChessboard :key="boardOrientation" :board-config="boardConfig" @board-created="onBoardCreated"
+                @move="onMove" @checkmate="onCheckmate" @stalemate="onStalemate" @draw="onDraw" @check="onCheck" />
             </div>
           </div>
 
@@ -192,6 +192,22 @@ onMounted(() => {
   $socket.on('users-update', (usersList: any[]) => {
     console.log('👥 Users update:', usersList.length, 'players');
     users.value = usersList || [];
+
+    // ✅ Когда оба игрока подключены, определи цвет
+    if (usersList.length === 2 && !playerColor.value) {
+      const whitePlayer = usersList[0].username;
+      const blackPlayer = usersList[1].username;
+
+      if (currentUsername.value === whitePlayer) {
+        playerColor.value = 'w';
+        boardOrientation.value = 'white';
+        console.log('⚪ Determined: You are WHITE');
+      } else {
+        playerColor.value = 'b';
+        boardOrientation.value = 'black';
+        console.log('⚫ Determined: You are BLACK');
+      }
+    }
   });
 
   $socket.once('message-history', (history: any[]) => {
@@ -216,6 +232,20 @@ onMounted(() => {
         gameStarted.value = true;
         console.log('🔄 Replaying', state.moves.length, 'moves from FEN:', state.fen);
         boardAPI.setPosition(state.fen);
+
+        // ✅ ДОБАВЬ ЗДЕСЬ:
+        // Определи свой цвет по первому ходу или по позиции в комнате
+        if (state.whitePlayer) {
+          if (currentUsername.value === state.whitePlayer) {
+            playerColor.value = 'w';
+            boardOrientation.value = 'white';
+            console.log('⚪ You are WHITE');
+          } else {
+            playerColor.value = 'b';
+            boardOrientation.value = 'black';
+            console.log('⚫ You are BLACK');
+          }
+        }
       }
     }
   });
@@ -230,10 +260,12 @@ onMounted(() => {
       playerColor.value = 'w';
       boardOrientation.value = 'white';
       console.log('⚪ You are WHITE');
+      console.log('🔄 Board orientation set to: white');
     } else {
       playerColor.value = 'b';
       boardOrientation.value = 'black';
       console.log('⚫ You are BLACK');
+      console.log('🔄 Board orientation set to: black');  // ← ДОБАВЬ ЭТО
     }
 
     if (boardAPI) {
