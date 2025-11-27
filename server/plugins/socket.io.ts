@@ -203,14 +203,21 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
         room.users.set(socket.id, user);
         socket.join(roomCode);
 
+        // ✅ ОТПРАВЛЯЙ СОСТОЯНИЕ ЭТОМУ ПОЛЬЗОВАТЕЛЮ
         socket.emit('message-history', room.messages);
         socket.emit('game-state', room.gameState);
         socket.emit('statistics', Array.from(room.stats.entries()));
-        io.to(roomCode).emit('users-update', Array.from(room.users.values()));
+
+        // ✅ ОТПРАВЛЯЙ ОБНОВЛЕННЫЙ СПИСОК ВСЕМ В КОМНАТЕ (включая нового)
+        const usersList = Array.from(room.users.values());
+        io.to(roomCode).emit('users-update', usersList);
+
+        // ✅ ОТПРАВЛЯЙ СООБЩЕНИЕ ОСТАЛЬНЫМ (кроме нового)
         io.to(roomCode).except(socket.id).emit('user-joined', `${username} joined`);
+
         socket.emit('joined', roomCode);
 
-        console.log(`👤 ${username} joined room ${roomCode}`);
+        console.log(`👤 ${username} joined room ${roomCode}, total users: ${room.users.size}`);
     }
 
     function leaveRoom(socket: any) {

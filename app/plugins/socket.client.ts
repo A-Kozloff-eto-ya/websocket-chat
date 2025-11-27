@@ -5,7 +5,7 @@ let socket: any = null;
 export default defineNuxtPlugin(() => {
   const initSocket = () => {
     if (!socket) {
-      socket = io('http://localhost:3001', {
+      socket = io('http://localhost:3001', {  // ← ИЗМЕНИ НА 3000!
         transports: ['websocket', 'polling'],
         reconnection: true,
         reconnectionDelay: 1000,

@@ -30,14 +30,34 @@
           <!-- Статус игры -->
           <div v-if="gameStarted" class="mb-4 p-3 bg-blue-900 rounded">
             <p class="text-sm">Moves: {{ moves.length }}</p>
+            <p class="text-sm mt-2">
+              Your color: <span class="font-bold">{{ playerColor === 'w' ? '⚪ White' : '⚫ Black' }}</span>
+            </p>
+            <p class="text-sm mt-1">
+              Current turn:
+              <span :class="currentTurn === 'w' ? 'text-yellow-300' : 'text-gray-300'" class="font-bold">
+                {{ currentTurn === 'w' ? '⚪ White' : '⚫ Black' }}
+              </span>
+              <span v-if="playerColor === currentTurn" class="ml-2 text-green-400">✓ Your turn!</span>
+              <span v-else class="ml-2 text-red-400">⏳ Waiting...</span>
+            </p>
           </div>
 
           <!-- Шахматная доска -->
           <div class="bg-gray-700 p-4 rounded mb-4">
-            <TheChessboard :board-config="boardConfig" @board-created="onBoardCreated" @move="onMove"
-              @checkmate="onCheckmate" @stalemate="onStalemate" @draw="onDraw" @check="onCheck" />
+            <div :class="{ 'chessboard-disabled': gameStarted && playerColor !== currentTurn }">
+              <TheChessboard :board-config="boardConfig" @board-created="onBoardCreated" @move="onMove"
+                @checkmate="onCheckmate" @stalemate="onStalemate" @draw="onDraw" @check="onCheck" />
+            </div>
           </div>
 
+          <!-- <div v-if="gameStarted && playerColor !== currentTurn"
+            class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 rounded pointer-events-none">
+            <div class="text-center text-white font-bold">
+              <p class="text-lg">⏳ Waiting...</p>
+              <p class="text-sm mt-1">{{ currentTurn === 'w' ? '⚪ White' : '⚫ Black' }}'s turn</p>
+            </div>
+          </div> -->
           <!-- Кнопки управления -->
           <div v-if="gameStarted" class="flex gap-2">
             <button @click="undoMove" :disabled="moves.length === 0"
@@ -100,11 +120,14 @@ const roomCode = ref(route.params.room as string);
 const { $socket } = useNuxtApp();
 
 let boardAPI: BoardApi | null = null;
-
-const boardConfig: BoardConfig = {
+const boardOrientation = ref<'white' | 'black'>('white');
+const boardConfig = computed(() => ({
   coordinates: true,
-};
+  orientation: boardOrientation.value
+}));
 
+const playerColor = ref<'w' | 'b' | null>(null); // Цвет текущего игрока
+const currentTurn = ref<'w' | 'b'>('w'); // Чей сейчас ход (w = белые, b = черные)
 const users = ref<any[]>([]);
 const messages = ref<any[]>([]);
 const moves = ref<any[]>([]);
@@ -117,12 +140,12 @@ const chatContainer = ref<HTMLElement | null>(null);
 const processedMoveIds = new Set<string>();
 
 onMounted(() => {
-  console.log(boardAPI)
+  console.log(Object.getOwnPropertyNames(boardAPI))
 
   currentUsername.value = localStorage.getItem('username') || 'Anonymous';
   console.log('🎮 Game component mounted, room:', roomCode.value);
 
-  // ============ SOCKET LISTENERS ============
+  // ============ SETUP SOCKET LISTENERS ПЕРВЫМ ДЕЛОМ ============
 
   // Обновления пользователей
   $socket.on('users-update', (usersList: any[]) => {
@@ -131,7 +154,7 @@ onMounted(() => {
   });
 
   // История сообщений при входе
-  $socket.on('message-history', (history: any[]) => {
+  $socket.once('message-history', (history: any[]) => {
     console.log('💬 Message history:', history.length, 'messages');
     messages.value = history || [];
     nextTick(() => scrollChatToBottom());
@@ -145,17 +168,14 @@ onMounted(() => {
   });
 
   // Состояние игры при входе
-  $socket.on('game-state', (state: any) => {
-    console.log('🎮 Game state received:', { status: state.status, moves: state.moves?.length || 0 });
+  $socket.once('game-state', (state: any) => {
+    console.log('🎮 Game state received');
     if (state) {
       moves.value = state.moves || [];
-
-      // Если уже есть ходы, воспроизведём их все
       if (state.moves && state.moves.length > 0 && boardAPI) {
         console.log('🔄 Replaying', state.moves.length, 'moves');
         replayMoves(state.moves);
       }
-
       if (state.status === 'playing') {
         gameStarted.value = true;
       }
@@ -168,10 +188,33 @@ onMounted(() => {
     gameStarted.value = true;
     moves.value = [];
     processedMoveIds.clear();
+    currentTurn.value = 'w';
+
+    if (currentUsername.value === data.whitePlayer) {
+      playerColor.value = 'w';
+      boardOrientation.value = 'white';
+      console.log('⚪ You are WHITE');
+    } else {
+      playerColor.value = 'b';
+      boardOrientation.value = 'black';
+      console.log('⚫ You are BLACK');
+    }
+
     if (boardAPI) {
       boardAPI.resetBoard();
+
+      nextTick(() => {
+        // @ts-ignore - board это приватное свойство но мы можем его менять
+        if (boardAPI.board?.state) {
+          // @ts-ignore
+          boardAPI.board.state.orientation = boardOrientation.value;
+          // @ts-ignore
+          console.log(`🔄 Board orientation: ${boardAPI.board.state.orientation}`);
+        }
+      });
     }
   });
+
 
   // Ходы других игроков
   $socket.on('chess-move-received', (move: any) => {
@@ -184,21 +227,37 @@ onMounted(() => {
 
     console.log('🎯 Move received:', move.san, 'by', move.username);
     processedMoveIds.add(moveId);
+
+    // ✅ ДОБАВЛЯЙ ВСЕГДА, НЕЗАВИСИМО ОТ ТОГО, КТО СДЕЛАЛ ХОД
     moves.value.push(move);
 
     if (boardAPI && move.fen) {
-      boardAPI.setPosition(move.fen); // <-- это публичный метод, так и надо!
+      boardAPI.setPosition(move.fen);
     }
+
+    // ✅ СИНХРОНИЗИРУЙ ОЧЕРЕДНОСТЬ ПО FEN
+    const fenParts = move.fen.split(' ');
+    const nextTurn = fenParts[1] as 'w' | 'b';
+    currentTurn.value = nextTurn;
+    console.log(`↔️ Turn synced to: ${currentTurn.value === 'w' ? '⚪ White' : '⚫ Black'}`);
   });
 
+
   // Отмена хода
-  $socket.on('chess-undo-received', () => {
+  $socket.on('chess-undo-received', (fen?: string) => {
     console.log('↶ Undo received');
     if (boardAPI) {
       boardAPI.undoLastMove();
     }
     moves.value.pop();
-    processedMoveIds.clear(); // Очищаем, так как ходы изменились
+    processedMoveIds.clear();
+
+    // ✅ ПОСЛЕ UNDO ПОЛУЧИ ТЕКУЩИЙ FEN И СИНХРОНИЗИРУЙ
+    const currentFen = boardAPI?.getFen() || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    const fenParts = currentFen.split(' ');
+    const turn = fenParts[1] as 'w' | 'b';
+    currentTurn.value = turn;
+    console.log(`↔️ After undo, turn is: ${currentTurn.value === 'w' ? '⚪ White' : '⚫ Black'}`);
   });
 
   // Сброс доски
@@ -209,6 +268,7 @@ onMounted(() => {
     }
     moves.value = [];
     gameStarted.value = false;
+    currentTurn.value = 'w'; // ✅ СБРОС НА БЕЛЫХ
     processedMoveIds.clear();
   });
 
@@ -223,6 +283,12 @@ onMounted(() => {
     });
     nextTick(() => scrollChatToBottom());
   });
+
+  // ============ ПОСЛЕ УСТАНОВКИ СЛУШАТЕЛЕЙ ЗАПРОСИ СОСТОЯНИЕ ============
+  setTimeout(() => {
+    console.log('📋 Requesting room state for:', roomCode.value);
+    $socket.emit('get-room-state', roomCode.value);
+  }, 500);
 });
 
 // ============ BOARD EVENTS ============
@@ -233,17 +299,41 @@ const onBoardCreated = (api: BoardApi) => {
 };
 
 const onMove = (move: MoveEvent) => {
-  if (!gameStarted.value) return;
+  if (!gameStarted.value) {
+    console.warn('❌ Game not started');
+    if (boardAPI) {
+      boardAPI.undoLastMove();
+    }
+    return;
+  }
+
+  // ✅ ПРОВЕРКА: ЭТО ТВОЙ ХОД?
+  if (playerColor.value !== currentTurn.value) {
+    console.warn(`❌ Not your turn!`);
+    if (boardAPI) {
+      setTimeout(() => boardAPI?.undoLastMove(), 0);
+    }
+    return;
+  }
+
+  const fen = boardAPI?.getFen() || '';
+  const fenParts = fen.split(' ');
+  const nextTurn = fenParts[1] as 'w' | 'b';
 
   const moveData = {
     from: move.from,
     to: move.to,
     promotion: move.promotion || undefined,
-    fen: boardAPI?.getFen() || '', // <-- всегда getFen
+    fen: fen,
     san: move.san
   };
 
-  moves.value.push({ ...moveData, username: currentUsername.value, timestamp: new Date() });
+  // ❌ НЕ ДОБАВЛЯЙ ЗДЕСЬ!
+  // moves.value.push({ ...moveData, username: currentUsername.value, timestamp: new Date() });
+
+  // ✅ ТОЛЬКО ОБНОВИ ОЧЕРЕДНОСТЬ
+  currentTurn.value = nextTurn;
+
   $socket.emit('chess-move', moveData);
 };
 
@@ -350,5 +440,18 @@ const replayMoves = (movesToReplay: any[]) => {
 
 onUnmounted(() => {
   console.log('Game component unmounted');
+  $socket.off('users-update');
+  $socket.off('message-received');
+  $socket.off('chess-game-started');
+  $socket.off('chess-move-received');
+  $socket.off('chess-undo-received');
+  $socket.off('chess-reset-received');
+  $socket.off('user-joined');
 });
 </script>
+
+<style>
+.chessboard-disabled {
+  pointer-events: none;
+}
+</style>
