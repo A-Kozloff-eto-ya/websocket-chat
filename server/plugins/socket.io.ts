@@ -83,7 +83,7 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
     console.log('🔧 Socket.IO plugin loading...');
 
     if (!io) {
-        io = new Server(3001, {
+        io = new Server(3000, {
             cors: { origin: '*', methods: ['GET', 'POST'] },
             transports: ['websocket', 'polling']
         });
@@ -353,7 +353,7 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
             });
         });
 
-        console.log('✅ Socket.IO listening on port 3001');
+        console.log('✅ Socket.IO listening on port 3000');
     }
 
     function joinRoom(socket: any, username: string, roomCode: string) {
