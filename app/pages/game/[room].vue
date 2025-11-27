@@ -1,3 +1,5 @@
+// pages/game/[room].vue - ПОЛНЫЙ ИСПРАВЛЕННЫЙ ФАЙЛ
+
 <template>
   <div class="min-h-screen bg-gray-900 text-white p-4">
     <div class="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -51,17 +53,11 @@
             </div>
           </div>
 
-          <!-- <div v-if="gameStarted && playerColor !== currentTurn"
-            class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 rounded pointer-events-none">
-            <div class="text-center text-white font-bold">
-              <p class="text-lg">⏳ Waiting...</p>
-              <p class="text-sm mt-1">{{ currentTurn === 'w' ? '⚪ White' : '⚫ Black' }}'s turn</p>
-            </div>
-          </div> -->
           <!-- Кнопки управления -->
           <div v-if="gameStarted" class="flex gap-2">
-            <button @click="undoMove" :disabled="moves.length === 0"
-              class="flex-1 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 rounded">
+            <button @click="undoMove" :disabled="!canUndo"
+              :title="!canUndo ? 'You can only undo your own last move' : 'Undo your last move'"
+              class="flex-1 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded transition">
               ↶ Undo
             </button>
             <button @click="resetGame" class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 rounded">
@@ -126,8 +122,8 @@ const boardConfig = computed(() => ({
   orientation: boardOrientation.value
 }));
 
-const playerColor = ref<'w' | 'b' | null>(null); // Цвет текущего игрока
-const currentTurn = ref<'w' | 'b'>('w'); // Чей сейчас ход (w = белые, b = черные)
+const playerColor = ref<'w' | 'b' | null>(null);
+const currentTurn = ref<'w' | 'b'>('w');
 const users = ref<any[]>([]);
 const messages = ref<any[]>([]);
 const moves = ref<any[]>([]);
@@ -136,59 +132,99 @@ const messageText = ref('');
 const currentUsername = ref('');
 const chatContainer = ref<HTMLElement | null>(null);
 
-// Tracks moves locally to prevent duplicate processing
-const processedMoveIds = new Set<string>();
+const onBoardCreated = (api: BoardApi) => {
+  console.log('✅ Board API ready');
+  boardAPI = api;
+};
+
+const onMove = (move: MoveEvent) => {
+  if (!gameStarted.value) {
+    console.warn('❌ Game not started');
+    if (boardAPI) boardAPI.undoLastMove();
+    return;
+  }
+
+  if (playerColor.value !== currentTurn.value) {
+    console.warn(`❌ Not your turn!`);
+    if (boardAPI) {
+      setTimeout(() => boardAPI?.undoLastMove(), 0);
+    }
+    return;
+  }
+
+  const fen = boardAPI?.getFen() || '';
+
+  const moveData = {
+    from: move.from,
+    to: move.to,
+    promotion: move.promotion || undefined,
+    fen: fen,
+    san: move.san
+  };
+
+  console.log(`📤 Sending move: ${move.san}`);
+  $socket.emit('chess-move', moveData);
+};
+
+const canUndo = computed(() => {
+  // Undo доступен ТОЛЬКО если:
+  // 1. Игра идёт
+  // 2. Есть ходы
+  // 3. Это ТВОЙ ход
+  // 4. Это ПОСЛЕДНИЙ ход в истории
+
+  if (!gameStarted.value || moves.value.length === 0) {
+    return false;
+  }
+
+  const lastMove = moves.value[moves.value.length - 1];
+  const isMyLastMove = lastMove.username === currentUsername.value;
+
+  console.log(`🔍 Undo check: lastMove="${lastMove.san}" by "${lastMove.username}", you="${currentUsername.value}", allowed=${isMyLastMove}`);
+
+  return isMyLastMove;
+});
 
 onMounted(() => {
-  console.log(Object.getOwnPropertyNames(boardAPI))
-
   currentUsername.value = localStorage.getItem('username') || 'Anonymous';
   console.log('🎮 Game component mounted, room:', roomCode.value);
 
-  // ============ SETUP SOCKET LISTENERS ПЕРВЫМ ДЕЛОМ ============
-
-  // Обновления пользователей
   $socket.on('users-update', (usersList: any[]) => {
     console.log('👥 Users update:', usersList.length, 'players');
     users.value = usersList || [];
   });
 
-  // История сообщений при входе
   $socket.once('message-history', (history: any[]) => {
     console.log('💬 Message history:', history.length, 'messages');
     messages.value = history || [];
     nextTick(() => scrollChatToBottom());
   });
 
-  // Новые сообщения
   $socket.on('message-received', (msg: any) => {
     console.log('💬 New message from', msg.username);
     messages.value.push(msg);
     nextTick(() => scrollChatToBottom());
   });
 
-  // Состояние игры при входе
   $socket.once('game-state', (state: any) => {
     console.log('🎮 Game state received');
-    if (state) {
-      moves.value = state.moves || [];
-      if (state.moves && state.moves.length > 0 && boardAPI) {
-        console.log('🔄 Replaying', state.moves.length, 'moves');
-        replayMoves(state.moves);
-      }
-      if (state.status === 'playing') {
+    if (state && state.moves) {
+      moves.value = state.moves;
+      currentTurn.value = state.currentTurn || 'w';
+
+      if (state.status === 'playing' && boardAPI) {
         gameStarted.value = true;
+        console.log('🔄 Replaying', state.moves.length, 'moves from FEN:', state.fen);
+        boardAPI.setPosition(state.fen);
       }
     }
   });
 
-  // Старт игры
   $socket.on('chess-game-started', (data: any) => {
     console.log('▶️ Game started:', data.whitePlayer, 'vs', data.blackPlayer);
     gameStarted.value = true;
     moves.value = [];
-    processedMoveIds.clear();
-    currentTurn.value = 'w';
+    currentTurn.value = data.currentTurn || 'w';
 
     if (currentUsername.value === data.whitePlayer) {
       playerColor.value = 'w';
@@ -202,77 +238,85 @@ onMounted(() => {
 
     if (boardAPI) {
       boardAPI.resetBoard();
-
-      nextTick(() => {
-        // @ts-ignore - board это приватное свойство но мы можем его менять
-        if (boardAPI.board?.state) {
-          // @ts-ignore
-          boardAPI.board.state.orientation = boardOrientation.value;
-          // @ts-ignore
-          console.log(`🔄 Board orientation: ${boardAPI.board.state.orientation}`);
-        }
-      });
+      if (data.fen) {
+        nextTick(() => boardAPI?.setPosition(data.fen));
+      }
     }
   });
 
-
-  // Ходы других игроков
   $socket.on('chess-move-received', (move: any) => {
-    const moveId = `${move.from}${move.to}${move.promotion || ''}`;
-
-    if (processedMoveIds.has(moveId)) {
-      console.log('⏭️  Move already processed, skipping:', move.san);
-      return;
-    }
-
     console.log('🎯 Move received:', move.san, 'by', move.username);
-    processedMoveIds.add(moveId);
 
-    // ✅ ДОБАВЛЯЙ ВСЕГДА, НЕЗАВИСИМО ОТ ТОГО, КТО СДЕЛАЛ ХОД
-    moves.value.push(move);
+    moves.value.push({
+      from: move.from,
+      to: move.to,
+      promotion: move.promotion,
+      fen: move.fen,
+      san: move.san,
+      username: move.username,
+      timestamp: new Date(move.timestamp)
+    });
 
     if (boardAPI && move.fen) {
       boardAPI.setPosition(move.fen);
     }
 
-    // ✅ СИНХРОНИЗИРУЙ ОЧЕРЕДНОСТЬ ПО FEN
-    const fenParts = move.fen.split(' ');
-    const nextTurn = fenParts[1] as 'w' | 'b';
-    currentTurn.value = nextTurn;
-    console.log(`↔️ Turn synced to: ${currentTurn.value === 'w' ? '⚪ White' : '⚫ Black'}`);
-  });
-
-
-  // Отмена хода
-  $socket.on('chess-undo-received', (fen?: string) => {
-    console.log('↶ Undo received');
-    if (boardAPI) {
-      boardAPI.undoLastMove();
+    if (move.currentTurn !== undefined) {
+      currentTurn.value = move.currentTurn;
+      console.log(
+        `↔️ Turn synced to: ${currentTurn.value === 'w' ? '⚪ White' : '⚫ Black'}`
+      );
     }
-    moves.value.pop();
-    processedMoveIds.clear();
-
-    // ✅ ПОСЛЕ UNDO ПОЛУЧИ ТЕКУЩИЙ FEN И СИНХРОНИЗИРУЙ
-    const currentFen = boardAPI?.getFen() || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-    const fenParts = currentFen.split(' ');
-    const turn = fenParts[1] as 'w' | 'b';
-    currentTurn.value = turn;
-    console.log(`↔️ After undo, turn is: ${currentTurn.value === 'w' ? '⚪ White' : '⚫ Black'}`);
   });
 
-  // Сброс доски
-  $socket.on('chess-reset-received', () => {
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ✅ UNDO - С ПОЛНЫМ ЛОГИРОВАНИЕМ И ПРАВИЛЬНЫМ ПОРЯДКОМ
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  $socket.on('chess-undo-received', (data: any) => {
+    console.log('↶ Undo received from server', {
+      removedCount: data.removedCount,
+      newMovesCount: data.moves.length,
+      newTurn: data.currentTurn,
+      newFen: data.fen
+    });
+
+    // ✅ ШАГ 1: ОБНОВЛЯЕМ ЛОКАЛЬНОЕ СОСТОЯНИЕ
+    const oldMovesCount = moves.value.length;
+    moves.value = data.moves || [];
+
+    console.log(`  ├─ Updated moves: ${oldMovesCount} → ${moves.value.length}`);
+
+    // ✅ ШАГ 2: ОБНОВЛЯЕМ ОЧЕРЕДЬ
+    const oldTurn = currentTurn.value;
+    currentTurn.value = data.currentTurn;
+
+    console.log(`  ├─ Updated turn: ${oldTurn} → ${currentTurn.value}`);
+
+    // ✅ ШАГ 3: ОБНОВЛЯЕМ ДОСКУ (ПОСЛЕДНЕЕ!)
+    if (boardAPI && data.fen) {
+      console.log(`  ├─ 🔄 Setting board to: ${data.fen.substring(0, 30)}...`);
+      boardAPI.setPosition(data.fen);
+      console.log(`  └─ ✅ Board updated`);
+    }
+  });
+
+  $socket.on('chess-reset-received', (data: any) => {
     console.log('↻ Reset received');
-    if (boardAPI) {
-      boardAPI.resetBoard();
-    }
+
     moves.value = [];
+    currentTurn.value = data.currentTurn || 'w';
     gameStarted.value = false;
-    currentTurn.value = 'w'; // ✅ СБРОС НА БЕЛЫХ
-    processedMoveIds.clear();
+
+    if (boardAPI) {
+      if (data.fen) {
+        boardAPI.setPosition(data.fen);
+      } else {
+        boardAPI.resetBoard();
+      }
+    }
   });
 
-  // Присоединение пользователя
   $socket.on('user-joined', (msg: string) => {
     console.log('👋', msg);
     messages.value.push({
@@ -284,61 +328,14 @@ onMounted(() => {
     nextTick(() => scrollChatToBottom());
   });
 
-  // ============ ПОСЛЕ УСТАНОВКИ СЛУШАТЕЛЕЙ ЗАПРОСИ СОСТОЯНИЕ ============
   setTimeout(() => {
     console.log('📋 Requesting room state for:', roomCode.value);
     $socket.emit('get-room-state', roomCode.value);
   }, 500);
 });
 
-// ============ BOARD EVENTS ============
-
-const onBoardCreated = (api: BoardApi) => {
-  console.log('✅ Board API ready');
-  boardAPI = api;
-};
-
-const onMove = (move: MoveEvent) => {
-  if (!gameStarted.value) {
-    console.warn('❌ Game not started');
-    if (boardAPI) {
-      boardAPI.undoLastMove();
-    }
-    return;
-  }
-
-  // ✅ ПРОВЕРКА: ЭТО ТВОЙ ХОД?
-  if (playerColor.value !== currentTurn.value) {
-    console.warn(`❌ Not your turn!`);
-    if (boardAPI) {
-      setTimeout(() => boardAPI?.undoLastMove(), 0);
-    }
-    return;
-  }
-
-  const fen = boardAPI?.getFen() || '';
-  const fenParts = fen.split(' ');
-  const nextTurn = fenParts[1] as 'w' | 'b';
-
-  const moveData = {
-    from: move.from,
-    to: move.to,
-    promotion: move.promotion || undefined,
-    fen: fen,
-    san: move.san
-  };
-
-  // ❌ НЕ ДОБАВЛЯЙ ЗДЕСЬ!
-  // moves.value.push({ ...moveData, username: currentUsername.value, timestamp: new Date() });
-
-  // ✅ ТОЛЬКО ОБНОВИ ОЧЕРЕДНОСТЬ
-  currentTurn.value = nextTurn;
-
-  $socket.emit('chess-move', moveData);
-};
-
 const onCheckmate = (isMated: string) => {
-  const winner = isMated === 'w' ? '⚪ White' : '⚫ Black';
+  const winner = isMated === 'b' ? '⚪ White' : '⚫ Black';
   console.log('🏁 Checkmate!', winner, 'wins');
   messages.value.push({
     id: Date.now().toString(),
@@ -379,8 +376,6 @@ const onCheck = (isInCheck: string) => {
   console.log('⚠️ Check!', player, 'is in check');
 };
 
-// ============ GAME CONTROLS ============
-
 const startGame = () => {
   if (users.value.length < 2) {
     console.warn('❌ Not enough players');
@@ -395,6 +390,11 @@ const startGame = () => {
 };
 
 const undoMove = () => {
+  if (!canUndo.value) {
+    console.warn('❌ Cannot undo: Not your last move!');
+    return;
+  }
+
   console.log('↶ Undo move');
   $socket.emit('chess-undo');
 };
@@ -404,11 +404,8 @@ const resetGame = () => {
   $socket.emit('chess-reset');
 };
 
-// ============ CHAT ============
-
 const sendMessage = () => {
   if (!messageText.value.trim()) return;
-
   console.log('📤 Sending message');
   $socket.emit('new-message', messageText.value);
   messageText.value = '';
@@ -417,24 +414,6 @@ const sendMessage = () => {
 const scrollChatToBottom = () => {
   if (chatContainer.value) {
     chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
-  }
-};
-
-// ============ HELPERS ============
-
-const replayMoves = (movesToReplay: any[]) => {
-  if (!boardAPI) return;
-
-  boardAPI.resetBoard();
-
-  for (const move of movesToReplay) {
-    try {
-      boardAPI.move({ from: move.from, to: move.to, promotion: move.promotion });  // ← boardAPI.move()
-      const moveId = `${move.from}${move.to}${move.promotion || ''}`;
-      processedMoveIds.add(moveId);
-    } catch (error) {
-      console.error('Error replaying move:', move.san, error);
-    }
   }
 };
 

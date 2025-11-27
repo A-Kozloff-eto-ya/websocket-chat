@@ -1,30 +1,83 @@
-// server/plugins/socket.io.ts (обновленный)
+// server/plugins/socket.io.ts (ИСПРАВЛЕННЫЙ - ПРАВИЛЬНЫЙ UNDO)
+
 import type { NitroApp } from 'nitropack';
 import { Server } from 'socket.io';
 import { randomUUID } from 'crypto';
 
-interface User { id: string; username: string; room: string }
-interface Message { id: string; username: string; message: string; timestamp: Date }
-interface ChessMove { from: string; to: string; promotion?: string; fen: string; san: string; timestamp: Date; username: string }
+interface User {
+    id: string;
+    username: string;
+    room: string;
+}
+
+interface ChessMove {
+    from: string;
+    to: string;
+    promotion?: string;
+    fen: string;
+    san: string;
+    timestamp: Date;
+    username: string;
+}
+
 interface GameState {
     fen: string;
     moves: ChessMove[];
     whitePlayer?: string;
     blackPlayer?: string;
     status: 'waiting' | 'playing' | 'finished';
+    currentTurn: 'w' | 'b';
     result?: string;
     winner?: string;
+}
+
+interface Message {
+    id: string;
+    username: string;
+    message: string;
+    timestamp: Date;
 }
 
 interface Room {
     users: Map<string, User>;
     messages: Message[];
     gameState: GameState;
-    stats: Map<string, any>;
 }
 
 const rooms = new Map<string, Room>();
 let io: Server;
+
+/**
+ * Извлечение текущего игрока из FEN
+ * FEN формат: "fen pieces 0" где [1] это 'w' или 'b'
+ */
+function getCurrentTurnFromFen(fen: string): 'w' | 'b' {
+    const parts = fen.split(' ');
+    return (parts[1] || 'w') as 'w' | 'b';
+}
+
+/**
+ * Проверка что текущий игрок имеет право делать ход
+ */
+function isPlayersTurn(username: string, room: Room): boolean {
+    const gameState = room.gameState;
+
+    if (gameState.status !== 'playing') {
+        return false;
+    }
+
+    const currentTurn = gameState.currentTurn;
+
+    if (currentTurn === 'w' && gameState.whitePlayer === username) {
+        return true;
+    }
+
+    if (currentTurn === 'b' && gameState.blackPlayer === username) {
+        return true;
+    }
+
+    return false;
+}
 
 export default defineNitroPlugin((nitroApp: NitroApp) => {
     console.log('🔧 Socket.IO plugin loading...');
@@ -48,9 +101,9 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
                     gameState: {
                         fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
                         moves: [],
-                        status: 'waiting'
-                    },
-                    stats: new Map()
+                        status: 'waiting',
+                        currentTurn: 'w'
+                    }
                 });
 
                 joinRoom(socket, username, roomCode);
@@ -84,38 +137,6 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
                 }
             });
 
-            socket.on('chess-move', (data: any) => {
-                console.log(`🎯 CHESS-MOVE from ${socket.id}:`, data.san);
-
-                const rooms_array = Array.from(rooms.values());
-                for (const room of rooms_array) {
-                    const user = room.users.get(socket.id);
-                    if (user) {
-                        room.gameState.fen = data.fen;
-                        room.gameState.moves.push({
-                            from: data.from,
-                            to: data.to,
-                            promotion: data.promotion,
-                            fen: data.fen,
-                            san: data.san,
-                            timestamp: new Date(),
-                            username: user.username
-                        });
-
-                        io.to(user.room).emit('chess-move-received', {
-                            from: data.from,
-                            to: data.to,
-                            promotion: data.promotion,
-                            fen: data.fen,
-                            san: data.san,
-                            username: user.username,
-                            timestamp: new Date()
-                        });
-                        break;
-                    }
-                }
-            });
-
             socket.on('chess-start-game', (data: any) => {
                 console.log(`🎮 GAME-START: ${data.whitePlayer} vs ${data.blackPlayer}`);
 
@@ -123,21 +144,92 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
                 for (const room of rooms_array) {
                     const user = room.users.get(socket.id);
                     if (user) {
-                        room.gameState.status = 'playing';
-                        room.gameState.whitePlayer = data.whitePlayer;
-                        room.gameState.blackPlayer = data.blackPlayer;
-                        room.gameState.moves = [];
-                        room.gameState.fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+                        room.gameState = {
+                            fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+                            moves: [],
+                            status: 'playing',
+                            whitePlayer: data.whitePlayer,
+                            blackPlayer: data.blackPlayer,
+                            currentTurn: 'w'
+                        };
 
                         io.to(user.room).emit('chess-game-started', {
                             whitePlayer: data.whitePlayer,
                             blackPlayer: data.blackPlayer,
-                            fen: room.gameState.fen
+                            fen: room.gameState.fen,
+                            currentTurn: room.gameState.currentTurn
                         });
+
+                        console.log(`✅ Game started in room ${user.room}`);
                         break;
                     }
                 }
             });
+
+            socket.on('chess-move', (data: any) => {
+                console.log(`🎯 CHESS-MOVE from ${socket.id}: ${data.san}`);
+
+                const rooms_array = Array.from(rooms.values());
+                for (const room of rooms_array) {
+                    const user = room.users.get(socket.id);
+                    if (!user) continue;
+
+                    if (room.gameState.status !== 'playing') {
+                        socket.emit('error', 'Game is not active');
+                        console.log('❌ Game not active');
+                        return;
+                    }
+
+                    if (!isPlayersTurn(user.username, room)) {
+                        socket.emit('error', 'Not your turn');
+                        console.log(`❌ Not ${user.username}'s turn, current: ${room.gameState.currentTurn}`);
+                        return;
+                    }
+
+                    if (!data.fen || data.fen.length < 20) {
+                        socket.emit('error', 'Invalid FEN');
+                        console.log('❌ Invalid FEN');
+                        return;
+                    }
+
+                    const moveRecord: ChessMove = {
+                        from: data.from,
+                        to: data.to,
+                        promotion: data.promotion,
+                        fen: data.fen,
+                        san: data.san,
+                        timestamp: new Date(),
+                        username: user.username
+                    };
+
+                    room.gameState.moves.push(moveRecord);
+                    room.gameState.fen = data.fen;
+
+                    // ✅ ВЫЧИСЛИ ОЧЕРЕДЬ ИЗ НОВОГО FEN (после хода)
+                    room.gameState.currentTurn = getCurrentTurnFromFen(data.fen);
+
+                    console.log(
+                        `✅ Move saved. Next turn: ${room.gameState.currentTurn === 'w' ? '⚪ White' : '⚫ Black'}`
+                    );
+
+                    io.to(user.room).emit('chess-move-received', {
+                        from: data.from,
+                        to: data.to,
+                        promotion: data.promotion,
+                        fen: data.fen,
+                        san: data.san,
+                        username: user.username,
+                        timestamp: moveRecord.timestamp,
+                        currentTurn: room.gameState.currentTurn
+                    });
+
+                    break;
+                }
+            });
+
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // UNDO - ИСПРАВЛЕННАЯ ЛОГИКА
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             socket.on('chess-undo', () => {
                 console.log(`↶ UNDO from ${socket.id}`);
@@ -145,14 +237,68 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
                 const rooms_array = Array.from(rooms.values());
                 for (const room of rooms_array) {
                     const user = room.users.get(socket.id);
-                    if (user && room.gameState.moves.length > 0) {
-                        room.gameState.moves.pop();
-                        const previousMove = room.gameState.moves[room.gameState.moves.length - 1];
-                        room.gameState.fen = previousMove?.fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-
-                        io.to(user.room).emit('chess-undo-received', room.gameState.fen);
-                        break;
+                    if (!user) {
+                        console.log(`  ├─ Socket ${socket.id} not in this room`);
+                        continue;
                     }
+
+                    console.log(`  ├─ Found user: ${user.username} in room ${user.room}`);
+                    console.log(`  ├─ Room users count: ${room.users.size}`);
+                    console.log(`  ├─ Moves count BEFORE: ${room.gameState.moves.length}`);
+
+                    if (room.gameState.moves.length === 0) {
+                        socket.emit('error', 'No moves to undo');
+                        console.log(`  ├─ ERROR: No moves to undo`);
+                        return;
+                    }
+
+                    // ✅ ПРОВЕРЯЕМ ЧТО ПОСЛЕДНИЙ ХОД - ЭТО ХОД ТЕКУЩЕГО ИГРОКА
+                    const lastMove = room.gameState.moves[room.gameState.moves.length - 1];
+                    console.log(`  ├─ Last move: ${lastMove.san} by ${lastMove.username}`);
+                    console.log(`  ├─ Current player: ${user.username}`);
+
+                    if (lastMove.username !== user.username) {
+                        socket.emit('error', 'Can only undo your own moves');
+                        console.log(`  ├─ ERROR: ${user.username} trying to undo ${lastMove.username}'s move`);
+                        return;
+                    }
+
+                    // ✅ УДАЛЯЕМ ТОЛЬКО ПОСЛЕДНИЙ ХОД (твой ход)
+                    // НЕ трогаем ход противника!
+                    const undoneMove = room.gameState.moves.pop();
+                    console.log(`  ├─ Removed move: ${undoneMove?.san} by ${undoneMove?.username}`);
+
+                    // ✅ ВЫЧИСЛЯЕМ FEN ДЛЯ ВОССТАНОВЛЕНИЯ
+                    let fenToRestore = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+                    if (room.gameState.moves.length > 0) {
+                        fenToRestore = room.gameState.moves[room.gameState.moves.length - 1].fen;
+                        console.log(`  ├─ Restoring FEN from previous move: ${fenToRestore.substring(0, 30)}...`);
+                    } else {
+                        console.log(`  ├─ No moves left, restoring initial position`);
+                    }
+
+                    room.gameState.fen = fenToRestore;
+                    room.gameState.currentTurn = getCurrentTurnFromFen(fenToRestore);
+
+                    console.log(`  ├─ FINAL STATE:`);
+                    console.log(`  │  ├─ Moves count AFTER: ${room.gameState.moves.length}`);
+                    console.log(`  │  ├─ Removed: 1 move ✅`);
+                    console.log(`  │  ├─ CurrentTurn: ${room.gameState.currentTurn === 'w' ? '⚪ White' : '⚫ Black'}`);
+                    console.log(`  │  └─ FEN: ${fenToRestore.substring(0, 40)}...`);
+
+                    const payload = {
+                        fen: fenToRestore,
+                        currentTurn: room.gameState.currentTurn,
+                        moves: room.gameState.moves,
+                        removedCount: 1  // Всегда удаляем только 1 ход!
+                    };
+
+                    console.log(`  ├─ 📡 Broadcasting to room ${user.room}...`);
+                    io.to(user.room).emit('chess-undo-received', payload);
+
+                    console.log(`✅ Undo complete - 1 move removed`);
+                    break;
                 }
             });
 
@@ -166,10 +312,16 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
                         room.gameState = {
                             fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
                             moves: [],
-                            status: 'waiting'
+                            status: 'waiting',
+                            currentTurn: 'w'
                         };
 
-                        io.to(user.room).emit('chess-reset-received');
+                        io.to(user.room).emit('chess-reset-received', {
+                            fen: room.gameState.fen,
+                            currentTurn: room.gameState.currentTurn
+                        });
+
+                        console.log(`✅ Game reset in room ${user.room}`);
                         break;
                     }
                 }
@@ -181,7 +333,14 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
                 if (room) {
                     socket.emit('users-update', Array.from(room.users.values()));
                     socket.emit('message-history', room.messages);
-                    socket.emit('game-state', room.gameState);
+                    socket.emit('game-state', {
+                        fen: room.gameState.fen,
+                        moves: room.gameState.moves,
+                        status: room.gameState.status,
+                        whitePlayer: room.gameState.whitePlayer,
+                        blackPlayer: room.gameState.blackPlayer,
+                        currentTurn: room.gameState.currentTurn
+                    });
                     console.log(`✅ State sent for room ${roomCode}`);
                 } else {
                     console.log(`❌ Room not found: ${roomCode}`);
@@ -203,20 +362,22 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
         room.users.set(socket.id, user);
         socket.join(roomCode);
 
-        // ✅ ОТПРАВЛЯЙ СОСТОЯНИЕ ЭТОМУ ПОЛЬЗОВАТЕЛЮ
+        socket.emit('users-update', Array.from(room.users.values()));
         socket.emit('message-history', room.messages);
-        socket.emit('game-state', room.gameState);
-        socket.emit('statistics', Array.from(room.stats.entries()));
+        socket.emit('game-state', {
+            fen: room.gameState.fen,
+            moves: room.gameState.moves,
+            status: room.gameState.status,
+            whitePlayer: room.gameState.whitePlayer,
+            blackPlayer: room.gameState.blackPlayer,
+            currentTurn: room.gameState.currentTurn
+        });
 
-        // ✅ ОТПРАВЛЯЙ ОБНОВЛЕННЫЙ СПИСОК ВСЕМ В КОМНАТЕ (включая нового)
         const usersList = Array.from(room.users.values());
         io.to(roomCode).emit('users-update', usersList);
-
-        // ✅ ОТПРАВЛЯЙ СООБЩЕНИЕ ОСТАЛЬНЫМ (кроме нового)
         io.to(roomCode).except(socket.id).emit('user-joined', `${username} joined`);
 
         socket.emit('joined', roomCode);
-
         console.log(`👤 ${username} joined room ${roomCode}, total users: ${room.users.size}`);
     }
 
