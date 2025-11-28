@@ -23,9 +23,9 @@
           </div>
 
           <!-- Кнопка старта -->
-          <div v-if="users.length === 2 && !gameStarted" class="mb-4">
+          <div v-if="users.length === 2 && !gameStarted && playerColor === 'w'" class="mb-4">
             <button @click="startGame" class="w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded font-bold">
-              ▶ Start Game
+              ▶ Начать игру
             </button>
           </div>
 
@@ -60,7 +60,7 @@
               class="flex-1 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded transition">
               ↶ Undo
             </button>
-            <button @click="resetGame" class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 rounded">
+            <button v-if="playerColor === 'w'" @click="resetGame" class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 rounded">
               ↻ Reset
             </button>
           </div>

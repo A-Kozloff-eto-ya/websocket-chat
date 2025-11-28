@@ -7,7 +7,7 @@ export default defineNuxtPlugin(() => {
   const getSocketUrl = (): string => {
     if (import.meta.env.DEV) {
       // Локально подключаемся к http://localhost:3000
-      return 'http://localhost:3000';
+      return 'http://localhost:3001';
     }
     // На продакшене к origin (Railway-домен)
     return window.location.origin;
